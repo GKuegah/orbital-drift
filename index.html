@@ -188,7 +188,6 @@
       <div class="leaderboard" aria-live="polite">
         <h3>Leaderboard (Top 10)</h3>
 
-        <!-- Player name input (persisted) -->
         <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
           <input id="playerName" type="text" maxlength="20" placeholder="Your name (max 20)"
                  style="flex:1; padding:6px 8px; border-radius:8px; border:1px solid rgba(255,255,255,0.06); background:transparent; color:inherit;">
@@ -238,6 +237,34 @@
 
     </div>
   </div>
+
+  <!-- ✅ Firebase (CDN) + Firestore + Anonymous Auth -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getFirestore, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBrqNTOtkHyF_B0GxQEc0z-EBDTvYLMYQE",
+      authDomain: "orbital-game-47d94.firebaseapp.com",
+      projectId: "orbital-game-47d94",
+      storageBucket: "orbital-game-47d94.firebasestorage.app",
+      messagingSenderId: "595298401576",
+      appId: "1:595298401576:web:2c793e522ebed3b3c0641d",
+      measurementId: "G-770KDBHD0K"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+
+    // Expose helpers to the game script
+    window.__fb = { db, auth, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp };
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) signInAnonymously(auth).catch(console.error);
+    });
+  </script>
 
   <script>
   (function () {
@@ -290,8 +317,9 @@
     const STATE_GAMEOVER = "gameover";
     let gameState = STATE_MENU;
 
-    // key map
-    const keys = {};
+    // ✅ Shared keys object (THIS fixes joystick on mobile)
+    const keys = (window.keys = window.keys || {});
+
     window.addEventListener("keydown", (e) => {
       keys[e.code] = true;
       if (e.code === "Space" && (gameState === STATE_MENU || gameState === STATE_GAMEOVER)) {
@@ -367,7 +395,6 @@
       ParticlePool.setMax(window.gameSettings.maxParticles);
       settingsPanel.style.display = "none";
       playSfx("menu");
-      // update audio engine volume and SFX enable
       AudioEngine.setVolume(window.gameSettings.sfxVolume);
     });
     btnResetSettings.addEventListener("click", () => {
@@ -451,22 +478,36 @@
         }
       }
       function drawAll(ctx) { for (const b of active) b.draw(ctx); }
-      function forEach(fn) { for (let i = 0; i < active.length; i++) fn(active[i], i); }
       function getAll() { return active; }
       function clear() { while(active.length) pool.push(active.pop()); }
-      return { create, release, updateAll, drawAll, forEach, getAll, clear };
+      return { create, updateAll, drawAll, getAll, clear };
     })();
 
     const ParticlePool = (function () {
       const pool = []; let active = []; let max = window.gameSettings ? window.gameSettings.maxParticles : 450;
-      function setMax(v) { max = Math.max(50, Math.min(2000, Math.floor(v))); if (active.length > max) { const excess = active.length - max; for (let i=0;i<excess;i++){ pool.push(active.pop()); } } }
-      function create(x,y,vx,vy,life,color) { if (active.length >= max) return null; let p = pool.pop(); if (!p) p = new Particle(0,0,0,0,0,"#fff"); p.init(x,y,vx,vy,life,color); active.push(p); return p; }
+      function setMax(v) {
+        max = Math.max(50, Math.min(2000, Math.floor(v)));
+        if (active.length > max) {
+          const excess = active.length - max;
+          for (let i=0;i<excess;i++){ pool.push(active.pop()); }
+        }
+      }
+      function create(x,y,vx,vy,life,color) {
+        if (active.length >= max) return null;
+        let p = pool.pop(); if (!p) p = new Particle(0,0,0,0,0,"#fff");
+        p.init(x,y,vx,vy,life,color); active.push(p); return p;
+      }
       function release(p) { pool.push(p); }
-      function updateAll(dt) { for (let i = active.length - 1; i >= 0; i--) { const p = active[i]; p.update(dt); if (!p.isAlive()) { active.splice(i,1); release(p); } } }
+      function updateAll(dt) {
+        for (let i = active.length - 1; i >= 0; i--) {
+          const p = active[i];
+          p.update(dt);
+          if (!p.isAlive()) { active.splice(i,1); release(p); }
+        }
+      }
       function drawAll(ctx) { for (const p of active) p.draw(ctx); }
-      function count() { return active.length; }
       function clear() { while(active.length) pool.push(active.pop()); }
-      return { setMax, create, updateAll, drawAll, count, clear };
+      return { setMax, create, updateAll, drawAll, clear };
     })();
 
     const EnemyPool = (function () {
@@ -481,10 +522,9 @@
       function updateAll(dt, player) { for (let i = 0; i < active.length; i++) active[i].update(dt, player); }
       function drawAll(ctx) { for (const e of active) e.draw(ctx); }
       function removeAt(idx) { const e = active[idx]; if (!e) return; active.splice(idx,1); release(e); }
-      function forEach(fn) { for (let i = 0; i < active.length; i++) fn(active[i], i); }
       function getAll() { return active; }
       function clear() { while(active.length) pool.push(active.pop()); }
-      return { create, release, updateAll, drawAll, removeAt, forEach, getAll, clear };
+      return { create, updateAll, drawAll, removeAt, getAll, clear };
     })();
 
     // --- Entities ---
@@ -598,16 +638,25 @@
 
     class Enemy {
       constructor(x,y,speed,size,type){ this.x=x; this.y=y; this.radius=size; this.speed=speed; this.type=type; this.hp = type===2?3: type===1?1:2; this.angle=0; this.spin = randRange(-1.5,1.5); }
-      update(dt,player){ const angleToPlayer = angleBetween(this.x,this.y,player.x,player.y); this.angle = angleToPlayer; const baseSpeed = this.speed * (this.type===1?1.6 : this.type===2?0.6 : 1); this.x += Math.cos(angleToPlayer)*baseSpeed*dt; this.y += Math.sin(angleToPlayer)*baseSpeed*dt; }
+      update(dt,player){
+        const angleToPlayer = angleBetween(this.x,this.y,player.x,player.y);
+        this.angle = angleToPlayer;
+        const baseSpeed = this.speed * (this.type===1?1.6 : this.type===2?0.6 : 1);
+        this.x += Math.cos(angleToPlayer)*baseSpeed*dt;
+        this.y += Math.sin(angleToPlayer)*baseSpeed*dt;
+      }
       draw(ctx){
         ctx.save(); ctx.translate(this.x,this.y); ctx.rotate(this.angle + Math.sin(performance.now()*0.002*this.spin)*0.3);
         let fill, stroke;
-        if (this.type===0){ fill="#ffcf6b"; stroke="#ff9f43"; } else if (this.type===1){ fill="#ff6bd9"; stroke="#ff2e93"; } else { fill="#6b9dff"; stroke="#2e6dff"; }
+        if (this.type===0){ fill="#ffcf6b"; stroke="#ff9f43"; }
+        else if (this.type===1){ fill="#ff6bd9"; stroke="#ff2e93"; }
+        else { fill="#6b9dff"; stroke="#2e6dff"; }
         const r = this.radius; ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(r,0); ctx.lineTo(-r*0.6,r*0.6); ctx.lineTo(-r*0.9,0); ctx.lineTo(-r*0.6,-r*0.6); ctx.closePath(); ctx.fill(); ctx.stroke();
         ctx.fillStyle = "rgba(10,10,20,0.9)"; ctx.beginPath(); ctx.arc(0,0,r*0.45,0,Math.PI*2); ctx.fill();
         ctx.restore();
-        const grad = ctx.createRadialGradient(this.x,this.y,0,this.x,this.y,this.radius*2.1); grad.addColorStop(0,"rgba(255,255,255,0.3)"); grad.addColorStop(1,"rgba(0,0,0,0)");
+        const grad = ctx.createRadialGradient(this.x,this.y,0,this.x,this.y,this.radius*2.1);
+        grad.addColorStop(0,"rgba(255,255,255,0.3)"); grad.addColorStop(1,"rgba(0,0,0,0)");
         ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(this.x,this.y,this.radius*2.1,0,Math.PI*2); ctx.fill();
       }
     }
@@ -623,19 +672,9 @@
       }
     }
 
-    // Global entities & metrics
-    let player = new Player();
-    let score = 0; let bestScore = 0; let maxWaveEver = 1; let wave = 1; let spawnTimer = 0; let spawnDelay = 2;
-    let timeSinceHit = 0; let multiplier = 1; let lastScore = 0;
-
-    // --- Leaderboard + player name persistence ---
-    const STORAGE_KEY = "orbitalDrift_leaderboard_v2";
+    // --- Firebase leaderboard helpers ---
     const PLAYER_NAME_KEY = "orbitalDrift_playerName_v1";
-
-    function loadLeaderboard() {
-      try { const raw = localStorage.getItem(STORAGE_KEY); if (!raw) return []; const parsed = JSON.parse(raw); if (!Array.isArray(parsed)) return []; return parsed; } catch (e) { return []; }
-    }
-    function saveLeaderboard(list) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); } catch (e) {} }
+    const LB_CACHE_KEY = "orbitalDrift_leaderboard_cache_v3";
 
     function getSavedPlayerName() {
       try { const n = localStorage.getItem(PLAYER_NAME_KEY); if (!n) return ""; return String(n).slice(0,20); } catch (e) { return ""; }
@@ -643,53 +682,95 @@
     function savePlayerName(name) {
       try { localStorage.setItem(PLAYER_NAME_KEY, String(name || "").slice(0,20)); } catch (e) {}
     }
+    function loadCachedLeaderboard() {
+      try { const raw = localStorage.getItem(LB_CACHE_KEY); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; }
+      catch { return []; }
+    }
+    function cacheLeaderboard(list) { try { localStorage.setItem(LB_CACHE_KEY, JSON.stringify(list)); } catch {} }
 
-    // addScore now accepts name (optional). stores { name, score, ts }
-    function addScoreToLeaderboard(sc, name) {
-      const list = loadLeaderboard();
+    async function fetchTopScoresFirestore() {
+      const fb = window.__fb;
+      if (!fb?.db) return null;
+      const scoresRef = fb.collection(fb.db, "scores");
+      const q = fb.query(scoresRef, fb.orderBy("score", "desc"), fb.orderBy("ts", "desc"), fb.limit(10));
+      const snap = await fb.getDocs(q);
+      return snap.docs.map(doc => {
+        const data = doc.data();
+        const ts = data.ts?.toDate ? data.ts.toDate().getTime() : Date.now();
+        return { name: data.name || "Player", score: data.score || 0, ts };
+      });
+    }
+
+    async function submitScoreFirestore(sc, name) {
+      const fb = window.__fb;
+      if (!fb?.db) return false;
       let pName = (typeof name === "string" ? name.trim() : "") || getSavedPlayerName() || "Player";
-      pName = pName.slice(0,20);
+      pName = pName.slice(0, 20);
       savePlayerName(pName);
-      const entry = { name: pName, score: Math.max(0, Math.floor(sc)), ts: Date.now() };
-      list.push(entry);
-      list.sort((a,b) => b.score - a.score);
-      const top = list.slice(0,10);
-      saveLeaderboard(top);
-      return top;
+      const cleanScore = Math.max(0, Math.floor(sc));
+      await fb.addDoc(fb.collection(fb.db, "scores"), {
+        name: pName,
+        score: cleanScore,
+        ts: fb.serverTimestamp()
+      });
+      return true;
     }
 
-    function getBestScoreFromLeaderboard() {
-      const list = loadLeaderboard(); if (list.length === 0) return 0; return list.reduce((m,e) => Math.max(m, e.score), 0);
-    }
-
-    function renderLeaderboardUI() {
-      const list = loadLeaderboard();
+    async function renderLeaderboardUI() {
       leaderList.innerHTML = "";
-      if (list.length === 0) {
-        const li = document.createElement("li"); li.textContent = "No scores yet — be the first!"; leaderList.appendChild(li); return;
+      try {
+        const live = await fetchTopScoresFirestore();
+        if (live && live.length) {
+          cacheLeaderboard(live);
+          for (let i = 0; i < live.length; i++) {
+            const e = live[i];
+            const li = document.createElement("li");
+            const d = new Date(e.ts);
+            li.textContent = `${i+1}. ${e.name} — ${e.score} — ${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+            leaderList.appendChild(li);
+          }
+          return;
+        }
+      } catch (_) {}
+
+      const cached = loadCachedLeaderboard();
+      if (!cached.length) {
+        const li = document.createElement("li");
+        li.textContent = "No scores yet — be the first!";
+        leaderList.appendChild(li);
+        return;
       }
-      for (let i = 0; i < list.length; i++) {
-        const e = list[i];
+      for (let i = 0; i < cached.length; i++) {
+        const e = cached[i];
         const li = document.createElement("li");
         const d = new Date(e.ts);
-        const name = e.name || "Player";
-        li.textContent = `${i+1}. ${name} — ${e.score} — ${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+        li.textContent = `${i+1}. ${e.name} — ${e.score} — ${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
         leaderList.appendChild(li);
       }
     }
 
-    // IMPORTANT FIX:
-    // resetGameState now clears all active pools so starting a new game gives a clean slate.
+    function getBestScoreFromCache() {
+      const list = loadCachedLeaderboard();
+      if (!list.length) return 0;
+      return list.reduce((m, e) => Math.max(m, e.score || 0), 0);
+    }
+
+    // Global entities & metrics
+    let player = new Player();
+    let score = 0; let bestScore = 0; let maxWaveEver = 1; let wave = 1; let spawnTimer = 0; let spawnDelay = 2;
+    let timeSinceHit = 0; let multiplier = 1; let lastScore = 0;
+
+    // Particles helpers
+    function spawnBurst(x,y,direction,count,color){ for (let i=0;i<count;i++){ const ang = direction + randRange(-0.8,0.8); const speed = randRange(80,260); const vx = Math.cos(ang)*speed; const vy = Math.sin(ang)*speed; const life = randRange(0.25,0.7); ParticlePool.create(x,y,vx,vy,life,color); } }
+    function spawnCircularBurst(x,y,count,color){ for (let i=0;i<count;i++){ const ang = randRange(0,Math.PI*2); const speed = randRange(80,280); const vx = Math.cos(ang)*speed; const vy = Math.sin(ang)*speed; const life = randRange(0.35,0.9); ParticlePool.create(x,y,vx,vy,life,color); } }
+
     function resetGameState() {
-      // clear bullets, enemies, particles so leftover objects don't immediately affect the new run
       BulletPool.clear();
       EnemyPool.clear();
       ParticlePool.clear();
-
       player.reset();
       score = 0; wave = 1; multiplier = 1; timeSinceHit = 0;
       spawnTimer = 1; spawnDelay = 2;
-      // ensure particle cap from settings
       ParticlePool.setMax(window.gameSettings.maxParticles);
     }
 
@@ -702,17 +783,30 @@
 
     function pauseGame() {
       if (gameState !== STATE_PLAYING) return;
-      gameState = STATE_PAUSED; menuSubtitle.textContent = "Paused."; btnResume.style.display = "inline-block"; menuOverlay.style.display = "flex";
+      gameState = STATE_PAUSED;
+      menuSubtitle.textContent = "Paused.";
+      btnResume.style.display = "inline-block";
+      menuOverlay.style.display = "flex";
     }
 
-    function resumeGame() { if (gameState !== STATE_PAUSED) return; menuOverlay.style.display = "none"; gameState = STATE_PLAYING; }
+    function resumeGame() {
+      if (gameState !== STATE_PAUSED) return;
+      menuOverlay.style.display = "none";
+      gameState = STATE_PLAYING;
+    }
 
     function endGame() {
       gameState = STATE_GAMEOVER;
       lastScore = Math.max(0, Math.floor(score));
-      const currentName = (playerNameInput && playerNameInput.value && playerNameInput.value.trim()) ? playerNameInput.value.trim().slice(0,20) : getSavedPlayerName() || "Player";
-      addScoreToLeaderboard(lastScore, currentName);
-      bestScore = getBestScoreFromLeaderboard();
+      const currentName = (playerNameInput && playerNameInput.value && playerNameInput.value.trim())
+        ? playerNameInput.value.trim().slice(0,20)
+        : (getSavedPlayerName() || "Player");
+
+      submitScoreFirestore(lastScore, currentName)
+        .then(() => renderLeaderboardUI())
+        .catch(() => renderLeaderboardUI());
+
+      bestScore = getBestScoreFromCache();
       maxWaveEver = Math.max(maxWaveEver, wave);
       menuLastScore.textContent = lastScore.toString();
       menuBestScore.textContent = bestScore.toString();
@@ -720,30 +814,47 @@
       menuSubtitle.textContent = "Hull compromised. Drift ended.";
       btnResume.style.display = "none";
       menuOverlay.style.display = "flex";
-      renderLeaderboardUI();
       playSfx("explode");
     }
-
-    // Particles helpers using pool
-    function spawnBurst(x,y,direction,count,color){ for (let i=0;i<count;i++){ const ang = direction + randRange(-0.8,0.8); const speed = randRange(80,260); const vx = Math.cos(ang)*speed; const vy = Math.sin(ang)*speed; const life = randRange(0.25,0.7); ParticlePool.create(x,y,vx,vy,life,color); } }
-    function spawnCircularBurst(x,y,count,color){ for (let i=0;i<count;i++){ const ang = randRange(0,Math.PI*2); const speed = randRange(80,280); const vx = Math.cos(ang)*speed; const vy = Math.sin(ang)*speed; const life = randRange(0.35,0.9); ParticlePool.create(x,y,vx,vy,life,color); } }
 
     // Enemy spawning
     function spawnEnemy() {
       const margin = 40; const side = Math.floor(Math.random()*4); let x,y;
-      if (side===0){ x = randRange(0,canvas.width); y = -margin; } else if (side===1){ x = canvas.width + margin; y = randRange(0,canvas.height); } else if (side===2){ x = randRange(0,canvas.width); y = canvas.height + margin; } else { x = -margin; y = randRange(0,canvas.height); }
-      const baseSpeed = randRange(50,120) + wave*6; const size = randRange(14,28); let typeRand = Math.random(); let type = 0; if (typeRand > 0.8 && wave >= 3) type = 1; if (typeRand < 0.2 && wave >= 4) type = 2;
+      if (side===0){ x = randRange(0,canvas.width); y = -margin; }
+      else if (side===1){ x = canvas.width + margin; y = randRange(0,canvas.height); }
+      else if (side===2){ x = randRange(0,canvas.width); y = canvas.height + margin; }
+      else { x = -margin; y = randRange(0,canvas.height); }
+
+      const baseSpeed = randRange(50,120) + wave*6;
+      const size = randRange(14,28);
+
+      let typeRand = Math.random(); let type = 0;
+      if (typeRand > 0.8 && wave >= 3) type = 1;
+      if (typeRand < 0.2 && wave >= 4) type = 2;
+
       EnemyPool.create(x,y,baseSpeed,size,type);
     }
 
     function updateSpawning(dt) {
       spawnTimer -= dt;
-      if (spawnTimer <= 0) { spawnEnemy(); const baseDelay = clamp(1.6 - wave*0.08, 0.4, 1.6); const jitter = randRange(-0.15,0.15); spawnDelay = baseDelay + jitter; spawnTimer = spawnDelay; }
+      if (spawnTimer <= 0) {
+        spawnEnemy();
+        const baseDelay = clamp(1.6 - wave*0.08, 0.4, 1.6);
+        const jitter = randRange(-0.15,0.15);
+        spawnDelay = baseDelay + jitter;
+        spawnTimer = spawnDelay;
+      }
     }
 
     // Update & render loop
     let lastTime = performance.now();
-    function gameLoop(now) { const dt = Math.min((now - lastTime)/1000, 0.04); lastTime = now; if (gameState === STATE_PLAYING) update(dt); render(); requestAnimationFrame(gameLoop); }
+    function gameLoop(now) {
+      const dt = Math.min((now - lastTime)/1000, 0.04);
+      lastTime = now;
+      if (gameState === STATE_PLAYING) update(dt);
+      render();
+      requestAnimationFrame(gameLoop);
+    }
 
     function update(dt) {
       timeSinceHit += dt;
@@ -791,14 +902,22 @@
       }
 
       const desiredWave = 1 + Math.floor(score / 300);
-      if (desiredWave > wave) { wave = desiredWave; spawnCircularBurst(player.x, player.y, 40, "#61dafb"); }
+      if (desiredWave > wave) {
+        wave = desiredWave;
+        spawnCircularBurst(player.x, player.y, 40, "#61dafb");
+      }
 
       const enemiesNow = EnemyPool.getAll();
       for (let i = 0; i < enemiesNow.length; i++) {
         const e = enemiesNow[i];
         const r = player.radius + e.radius * 0.8;
         if (distSq(player, e) <= r*r) {
-          if (!player.isInvulnerable()) { player.hit(1); timeSinceHit = 0; multiplier = 1; score = Math.max(0, score - 40); }
+          if (!player.isInvulnerable()) {
+            player.hit(1);
+            timeSinceHit = 0;
+            multiplier = 1;
+            score = Math.max(0, score - 40);
+          }
           const ang = angleBetween(e.x, e.y, player.x, player.y);
           e.x += Math.cos(ang) * -20; e.y += Math.sin(ang) * -20;
         }
@@ -813,16 +932,29 @@
       updateDashHUD();
     }
 
-    function updateHearts() { hudHearts.innerHTML = ""; for (let i = 0; i < player.maxHp; i++) { const div = document.createElement("div"); div.className = "heart" + (i < player.hp ? "" : " empty"); hudHearts.appendChild(div); } }
+    function updateHearts() {
+      hudHearts.innerHTML = "";
+      for (let i = 0; i < player.maxHp; i++) {
+        const div = document.createElement("div");
+        div.className = "heart" + (i < player.hp ? "" : " empty");
+        hudHearts.appendChild(div);
+      }
+    }
 
     function updateDashHUD() {
       if (player.dashCooldown <= 0) {
-        hudDash.textContent = "Ready"; hudDash.style.background = "radial-gradient(circle at top, #2af598, #009efd)"; hudDash.style.color = "#020308";
+        hudDash.textContent = "Ready";
+        hudDash.style.background = "radial-gradient(circle at top, #2af598, #009efd)";
+        hudDash.style.color = "#020308";
       } else if (player.dashTimer > 0) {
-        hudDash.textContent = "Burst"; hudDash.style.background = "radial-gradient(circle at top, #b5f5ff, #61dafb)"; hudDash.style.color = "#020308";
+        hudDash.textContent = "Burst";
+        hudDash.style.background = "radial-gradient(circle at top, #b5f5ff, #61dafb)";
+        hudDash.style.color = "#020308";
       } else {
         const remain = Math.max(player.dashCooldown, 0).toFixed(1);
-        hudDash.textContent = remain + "s"; hudDash.style.background = "rgba(10,14,24,0.95)"; hudDash.style.color = "#f1f5ff";
+        hudDash.textContent = remain + "s";
+        hudDash.style.background = "rgba(10,14,24,0.95)";
+        hudDash.style.color = "#f1f5ff";
       }
     }
 
@@ -851,12 +983,34 @@
       BulletPool.drawAll(ctx);
       EnemyPool.drawAll(ctx);
       if (gameState !== STATE_GAMEOVER) player.draw(ctx);
-      if (gameState === STATE_PAUSED) { ctx.save(); ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.restore(); }
+      if (gameState === STATE_PAUSED) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.4)";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.restore();
+      }
     }
 
-    // Initial menu state & load leaderboard & settings & player name
+    // Init menu
+    function initPlayerNameUI() {
+      if (!playerNameInput) return;
+      playerNameInput.value = getSavedPlayerName() || "";
+      if (btnSaveName) {
+        btnSaveName.addEventListener("click", () => {
+          const v = String(playerNameInput.value || "").trim().slice(0,20);
+          playerNameInput.value = v;
+          savePlayerName(v);
+          playSfx("menu");
+          renderLeaderboardUI();
+        });
+      }
+      playerNameInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); btnSaveName && btnSaveName.click(); }
+      });
+    }
+
     function initMenuFromStorage() {
-      bestScore = getBestScoreFromLeaderboard();
+      bestScore = getBestScoreFromCache();
       menuOverlay.style.display = "flex";
       menuSubtitle.textContent = "Survive the incoming waves.";
       menuLastScore.textContent = "0";
@@ -864,43 +1018,44 @@
       menuMaxWave.textContent = "1";
       updateHearts();
       updateDashHUD();
-      renderLeaderboardUI();
       applySettingsToUI();
       ParticlePool.setMax(window.gameSettings.maxParticles);
       AudioEngine.init();
       AudioEngine.setVolume(window.gameSettings.sfxVolume);
       initPlayerNameUI();
+      renderLeaderboardUI();
     }
 
-    function initPlayerNameUI() {
-      try {
-        if (!playerNameInput) return;
-        playerNameInput.value = getSavedPlayerName() || "";
-        if (btnSaveName) {
-          btnSaveName.addEventListener("click", () => {
-            const v = String(playerNameInput.value || "").trim().slice(0,20);
-            playerNameInput.value = v;
-            savePlayerName(v);
-            playSfx("menu");
-            renderLeaderboardUI();
-          });
-        }
-        playerNameInput.addEventListener("keydown", (ev) => {
-          if (ev.key === "Enter") { ev.preventDefault(); if (btnSaveName) btnSaveName.click(); }
-        });
-      } catch (e) {}
-    }
+    // Keyboard start/pause controls
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space" && (gameState === STATE_MENU || gameState === STATE_GAMEOVER)) {
+        startNewGame();
+        e.preventDefault();
+      } else if (e.code === "KeyP") {
+        if (gameState === STATE_PLAYING) pauseGame();
+        else if (gameState === STATE_PAUSED) resumeGame();
+      }
+    });
 
     initMenuFromStorage();
     requestAnimationFrame(gameLoop);
 
-    // --- Mobile controls & integration ---
+    // --- Mobile controls integration ---
     window.shoot = function () { if (player && gameState === STATE_PLAYING) player.tryShoot(); };
-    window.dash = function () { if (!player || gameState !== STATE_PLAYING) return; if (player.dashCooldown <= 0 && player.dashTimer <= 0) { player.dashTimer = player.dashDuration; player.dashCooldown = player.dashCooldownMax; const dashSpeed = 500; player.vx += Math.cos(player.angle) * dashSpeed; player.vy += Math.sin(player.angle) * dashSpeed; spawnBurst(player.x, player.y, player.angle + Math.PI, 20, "#61dafb"); playSfx("dash"); } };
+    window.dash = function () {
+      if (!player || gameState !== STATE_PLAYING) return;
+      if (player.dashCooldown <= 0 && player.dashTimer <= 0) {
+        player.dashTimer = player.dashDuration;
+        player.dashCooldown = player.dashCooldownMax;
+        const dashSpeed = 500;
+        player.vx += Math.cos(player.angle) * dashSpeed;
+        player.vy += Math.sin(player.angle) * dashSpeed;
+        spawnBurst(player.x, player.y, player.angle + Math.PI, 20, "#61dafb");
+        playSfx("dash");
+      }
+    };
     window.togglePause = function () { if (gameState === STATE_PLAYING) pauseGame(); else if (gameState === STATE_PAUSED) resumeGame(); };
     window.mobileInput = { joystickAngle: null, thrust: false };
-    window.applySfxSettings = function() { if (AudioEngine) AudioEngine.setVolume(window.gameSettings.sfxVolume); };
-
   })();
   </script>
 
@@ -953,23 +1108,20 @@
       let activeJoyId = null;
       let joyCenter = null;
       let joyRadius = 50;
-      const prev = { ArrowLeft: false, ArrowRight: false, ArrowUp: false, Space: false, ShiftLeft: false };
+      const prev = { ArrowLeft: false, ArrowRight: false, ArrowUp: false };
 
       function updateJoyVisual(px, py) { if (joyKnob) joyKnob.style.transform = `translate(${px}px, ${py}px)`; }
-      function dispatchKey(type, code, key, keyCode) {
-        const ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, code: code, key: key, keyCode: keyCode, which: keyCode });
-        document.dispatchEvent(ev);
-        window.keys[code] = (type === 'keydown');
-      }
-      function setSimulatedKey(code, key, keyCode, on) {
-        if (prev[code] === on) return; prev[code] = on; if (on) dispatchKey('keydown', code, key, keyCode); else dispatchKey('keyup', code, key, keyCode);
+
+      function setKey(code, on) {
+        window.keys[code] = !!on;
       }
 
       function getJoyDeadzone() { return (window.gameSettings && typeof window.gameSettings.joyDeadzone === 'number') ? window.gameSettings.joyDeadzone : 0.28; }
       function getJoyExp() { return (window.gameSettings && typeof window.gameSettings.joyExp === 'number') ? window.gameSettings.joyExp : 1.6; }
 
       function onPointerDownJoy(e) {
-        e.preventDefault(); if (joyArea.setPointerCapture) try { joyArea.setPointerCapture(e.pointerId); } catch (_) {}
+        e.preventDefault();
+        if (joyArea.setPointerCapture) try { joyArea.setPointerCapture(e.pointerId); } catch (_) {}
         activeJoyId = e.pointerId;
         const rect = joyArea.getBoundingClientRect();
         joyCenter = { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
@@ -978,8 +1130,10 @@
       }
 
       function onPointerMoveJoy(e) {
+        if (!joyCenter) return;
         if (activeJoyId !== null && activeJoyId !== e.pointerId) return;
         e.preventDefault();
+
         const dx = e.clientX - joyCenter.x;
         const dy = e.clientY - joyCenter.y;
         const dist = Math.hypot(dx, dy);
@@ -988,23 +1142,38 @@
         const px = (dx / Math.max(1, dist)) * clamped;
         const py = (dy / Math.max(1, dist)) * clamped;
         updateJoyVisual(px, py);
-        const nx = dx / max; const ny = dy / max; const mag = Math.hypot(nx, ny);
-        const JOY_DEADZONE = getJoyDeadzone(); const JOY_EXP = getJoyExp();
+
+        const nx = dx / max;
+        const ny = dy / max;
+        const mag = Math.hypot(nx, ny);
+
+        const dead = getJoyDeadzone();
+        const exp = getJoyExp();
+
         let adjusted = 0;
-        if (mag > JOY_DEADZONE) { adjusted = (mag - JOY_DEADZONE) / (1 - JOY_DEADZONE); adjusted = Math.pow(clamp(adjusted,0,1), JOY_EXP); } else adjusted = 0;
+        if (mag > dead) {
+          adjusted = (mag - dead) / (1 - dead);
+          adjusted = Math.pow(Math.min(Math.max(adjusted, 0), 1), exp);
+        }
+
         if (adjusted > 0) {
           const ang = Math.atan2(ny, nx);
-          window.mobileInput.joystickAngle = ang; window.mobileInput.thrust = true;
-          const nxAdj = Math.cos(ang) * adjusted; const nyAdj = Math.sin(ang) * adjusted;
-          const leftOn = nxAdj < -0.35; const rightOn = nxAdj > 0.35; const upOn = adjusted > 0.35;
-          setSimulatedKey('ArrowLeft','ArrowLeft',37,leftOn);
-          setSimulatedKey('ArrowRight','ArrowRight',39,rightOn);
-          setSimulatedKey('ArrowUp','ArrowUp',38,upOn);
+          window.mobileInput.joystickAngle = ang;
+          window.mobileInput.thrust = true;
+
+          const nxAdj = Math.cos(ang) * adjusted;
+          const leftOn = nxAdj < -0.35;
+          const rightOn = nxAdj > 0.35;
+          const upOn = adjusted > 0.35;
+
+          if (prev.ArrowLeft !== leftOn) { prev.ArrowLeft = leftOn; setKey("ArrowLeft", leftOn); }
+          if (prev.ArrowRight !== rightOn) { prev.ArrowRight = rightOn; setKey("ArrowRight", rightOn); }
+          if (prev.ArrowUp !== upOn) { prev.ArrowUp = upOn; setKey("ArrowUp", upOn); }
         } else {
-          window.mobileInput.joystickAngle = null; window.mobileInput.thrust = false;
-          setSimulatedKey('ArrowLeft','ArrowLeft',37,false);
-          setSimulatedKey('ArrowRight','ArrowRight',39,false);
-          setSimulatedKey('ArrowUp','ArrowUp',38,false);
+          window.mobileInput.joystickAngle = null;
+          window.mobileInput.thrust = false;
+          setKey("ArrowLeft", false); setKey("ArrowRight", false); setKey("ArrowUp", false);
+          prev.ArrowLeft = prev.ArrowRight = prev.ArrowUp = false;
         }
       }
 
@@ -1012,8 +1181,12 @@
         if (activeJoyId !== e.pointerId) return;
         e.preventDefault();
         if (joyArea.releasePointerCapture) try { joyArea.releasePointerCapture(e.pointerId); } catch (_) {}
-        activeJoyId = null; updateJoyVisual(0,0); window.mobileInput.joystickAngle = null; window.mobileInput.thrust = false;
-        setSimulatedKey('ArrowLeft','ArrowLeft',37,false); setSimulatedKey('ArrowRight','ArrowRight',39,false); setSimulatedKey('ArrowUp','ArrowUp',38,false);
+        activeJoyId = null;
+        updateJoyVisual(0,0);
+        window.mobileInput.joystickAngle = null;
+        window.mobileInput.thrust = false;
+        setKey("ArrowLeft", false); setKey("ArrowRight", false); setKey("ArrowUp", false);
+        prev.ArrowLeft = prev.ArrowRight = prev.ArrowUp = false;
       }
 
       if (joyArea) {
@@ -1023,26 +1196,17 @@
         joyArea.addEventListener("pointercancel", onPointerUpJoy);
       }
 
-      function wireBtn(btnEl, code, key, keyCode, durationTap=false) {
+      function wireBtn(btnEl, onDown) {
         if (!btnEl) return;
-        btnEl.addEventListener("pointerdown", (e) => {
-          e.preventDefault();
-          try { btnEl.setPointerCapture && btnEl.setPointerCapture(e.pointerId); } catch (_) {}
-          setSimulatedKey(code, key, keyCode, true);
-          if (durationTap) setTimeout(() => setSimulatedKey(code, key, keyCode, false), 200);
-          if (code === 'Space' && typeof window.shoot === 'function') window.shoot();
-          if (code === 'ShiftLeft' && typeof window.dash === 'function') window.dash();
-        });
-        btnEl.addEventListener("pointerup", (e) => { e.preventDefault(); try { btnEl.releasePointerCapture && btnEl.releasePointerCapture(e.pointerId); } catch(_){} setSimulatedKey(code, key, keyCode, false); });
-        btnEl.addEventListener("pointercancel", (e)=> { e.preventDefault(); setSimulatedKey(code, key, keyCode, false); });
+        btnEl.addEventListener("pointerdown", (e) => { e.preventDefault(); try { btnEl.setPointerCapture && btnEl.setPointerCapture(e.pointerId); } catch (_) {} onDown(); });
         btnEl.addEventListener("contextmenu", (ev)=> ev.preventDefault());
       }
 
-      wireBtn(btnShoot, 'Space', ' ', 32, false);
-      wireBtn(btnDash, 'ShiftLeft', 'Shift', 16, true);
+      wireBtn(btnShoot, () => { if (typeof window.shoot === "function") window.shoot(); });
+      wireBtn(btnDash, () => { if (typeof window.dash === "function") window.dash(); });
 
       if (btnPause) {
-        btnPause.addEventListener("click", (e) => { e.preventDefault(); if (typeof window.togglePause === "function") window.togglePause(); else { dispatchKey('keydown','KeyP','p',80); dispatchKey('keyup','KeyP','p',80); } });
+        btnPause.addEventListener("click", (e) => { e.preventDefault(); if (typeof window.togglePause === "function") window.togglePause(); });
         btnPause.addEventListener("contextmenu",(ev)=>ev.preventDefault());
       }
 
