@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
   <meta charset="UTF-8" />
   <title>Orbital Drift - Canvas Game</title>
   <style>
@@ -1036,5 +1037,168 @@
       requestAnimationFrame(gameLoop);
     })();
   </script>
+<!-- Mobile controls: paste this immediately after your existing </script> and before </body> -->
+<style>
+  .mobile-controls { position: fixed; inset: 0; pointer-events: none; z-index: 9999; }
+  .joystick {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    background: rgba(10,12,18,0.18);
+    pointer-events: auto;
+    touch-action: none;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .joystick-inner {
+    width: 62px; height: 62px; border-radius:50%;
+    background: rgba(255,255,255,0.06);
+    transform: translate(0,0);
+    transition: transform 0.02s linear;
+  }
+
+  .controls-right {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    pointer-events: auto;
+    display: flex;
+    gap: 10px;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .mc-btn {
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: white;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-weight:700;
+    font-size:0.85rem;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .mc-btn.secondary { width: 48px; height:48px; font-size:0.75rem; border-radius:12px; }
+
+  @media(min-width:900px) {
+    .mobile-controls { display: none; }
+  }
+</style>
+
+<div class="mobile-controls" id="mobileControls" aria-hidden="false">
+  <div class="joystick" id="joyArea" aria-label="Joystick area">
+    <div class="joystick-inner" id="joyKnob"></div>
+  </div>
+
+  <div class="controls-right" id="controlsRight">
+    <div class="mc-btn" id="btnShoot">Shoot</div>
+    <div class="mc-btn secondary" id="btnDash">Dash</div>
+    <div class="mc-btn secondary" id="btnPause">P</div>
+  </div>
+</div>
+
+<script>
+(function setupMobileControls() {
+  const joyArea = document.getElementById("joyArea");
+  const joyKnob = document.getElementById("joyKnob");
+  const btnShoot = document.getElementById("btnShoot");
+  const btnDash = document.getElementById("btnDash");
+  const btnPause = document.getElementById("btnPause");
+
+  // If your game already uses a `keys` object this will reuse it; otherwise it creates one.
+  window.keys = window.keys || {};
+
+  let activeJoyId = null;
+  let joyCenter = null;
+  let joyRadius = 50;
+
+  // expose mobile input to the game loop
+  window.mobileInput = { joystickAngle: null, thrust: false };
+
+  function updateJoyVisual(px, py) {
+    joyKnob.style.transform = `translate(${px}px, ${py}px)`;
+  }
+
+  function onPointerDownJoy(e) {
+    e.preventDefault();
+    if (joyArea.setPointerCapture) try{ joyArea.setPointerCapture(e.pointerId); }catch(_){}
+    activeJoyId = e.pointerId;
+    const rect = joyArea.getBoundingClientRect();
+    joyCenter = { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
+    joyRadius = Math.min(rect.width, rect.height) * 0.42;
+    onPointerMoveJoy(e);
+  }
+
+  function onPointerMoveJoy(e) {
+    if (activeJoyId !== null && activeJoyId !== e.pointerId) return;
+    e.preventDefault();
+    const dx = e.clientX - joyCenter.x;
+    const dy = e.clientY - joyCenter.y;
+    const dist = Math.hypot(dx, dy);
+    const max = joyRadius;
+    const clamped = Math.min(dist, max);
+    const px = (dx / Math.max(1, dist)) * clamped;
+    const py = (dy / Math.max(1, dist)) * clamped;
+    updateJoyVisual(px, py);
+
+    const nx = dx / max;
+    const ny = dy / max;
+    const mag = Math.hypot(nx, ny);
+
+    if (mag > 0.2) {
+      window.mobileInput.joystickAngle = Math.atan2(ny, nx);
+      window.mobileInput.thrust = true;
+    } else {
+      window.mobileInput.joystickAngle = null;
+      window.mobileInput.thrust = false;
+    }
+  }
+
+  function onPointerUpJoy(e) {
+    if (activeJoyId !== e.pointerId) return;
+    e.preventDefault();
+    if (joyArea.releasePointerCapture) try{ joyArea.releasePointerCapture(e.pointerId); }catch(_){}
+    activeJoyId = null;
+    updateJoyVisual(0, 0);
+    window.mobileInput.joystickAngle = null;
+    window.mobileInput.thrust = false;
+  }
+
+  joyArea.addEventListener("pointerdown", onPointerDownJoy);
+  joyArea.addEventListener("pointermove", onPointerMoveJoy);
+  joyArea.addEventListener("pointerup", onPointerUpJoy);
+  joyArea.addEventListener("pointercancel", onPointerUpJoy);
+
+  function wireBtn(btnEl, onDown, onUp) {
+    btnEl.addEventListener("pointerdown", (e) => { e.preventDefault(); if (btnEl.setPointerCapture) try{ btnEl.setPointerCapture(e.pointerId); }catch(_){ } onDown(); });
+    btnEl.addEventListener("pointerup",   (e) => { e.preventDefault(); try{ if (btnEl.releasePointerCapture) btnEl.releasePointerCapture(e.pointerId);}catch(_){ } onUp(); });
+    btnEl.addEventListener("pointercancel",(e) => { e.preventDefault(); onUp(); });
+    btnEl.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  }
+
+  wireBtn(btnShoot,
+    () => { window.keys["Space"] = true; },
+    () => { window.keys["Space"] = false; }
+  );
+
+  wireBtn(btnDash,
+    () => { window.keys["Shift"] = true; },
+    () => { window.keys["Shift"] = false; }
+  );
+
+  wireBtn(btnPause,
+    () => { window.keys["Escape"] = true; },
+    () => { window.keys["Escape"] = false; }
+  );
+})();
+</script>
 </body>
 </html>
