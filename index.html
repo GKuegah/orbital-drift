@@ -1113,18 +1113,49 @@
   const btnDash = document.getElementById("btnDash");
   const btnPause = document.getElementById("btnPause");
 
-  // If your game already uses a `keys` object this will reuse it; otherwise it creates one.
+  // create/reuse keys map
   window.keys = window.keys || {};
 
   let activeJoyId = null;
   let joyCenter = null;
   let joyRadius = 50;
 
-  // expose mobile input to the game loop
+  // previous key states so we only dispatch changes
+  const prev = {
+    ArrowLeft: false,
+    ArrowRight: false,
+    ArrowUp: false,
+    Space: false,
+    ShiftLeft: false
+  };
+
+  // expose mobile input too
   window.mobileInput = { joystickAngle: null, thrust: false };
 
   function updateJoyVisual(px, py) {
-    joyKnob.style.transform = `translate(${px}px, ${py}px)`;
+    if (joyKnob) joyKnob.style.transform = `translate(${px}px, ${py}px)`;
+  }
+
+  // helper to dispatch keyboard events and update window.keys
+  function dispatchKey(type, code, key, keyCode) {
+    const ev = new KeyboardEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      code: code,
+      key: key,
+      keyCode: keyCode,
+      which: keyCode
+    });
+    document.dispatchEvent(ev);
+    // also update the keys map (many games poll this)
+    window.keys[code] = (type === 'keydown');
+  }
+
+  function setSimulatedKey(code, key, keyCode, on) {
+    if (prev[code] === on) return; // no change
+    prev[code] = on;
+    if (on) dispatchKey('keydown', code, key, keyCode);
+    else dispatchKey('keyup', code, key, keyCode);
   }
 
   function onPointerDownJoy(e) {
@@ -1149,10 +1180,12 @@
     const py = (dy / Math.max(1, dist)) * clamped;
     updateJoyVisual(px, py);
 
+    // normalized [-1..1]
     const nx = dx / max;
     const ny = dy / max;
     const mag = Math.hypot(nx, ny);
 
+    // set mobileInput for code that uses it
     if (mag > 0.2) {
       window.mobileInput.joystickAngle = Math.atan2(ny, nx);
       window.mobileInput.thrust = true;
@@ -1160,6 +1193,15 @@
       window.mobileInput.joystickAngle = null;
       window.mobileInput.thrust = false;
     }
+
+    // emulate arrow keys: left/right from nx, up for thrust
+    const leftOn  = nx < -0.25;
+    const rightOn = nx >  0.25;
+    const upOn    = mag > 0.25;
+
+    setSimulatedKey('ArrowLeft', 'ArrowLeft', 37, leftOn);
+    setSimulatedKey('ArrowRight','ArrowRight',39, rightOn);
+    setSimulatedKey('ArrowUp',   'ArrowUp',   38, upOn);
   }
 
   function onPointerUpJoy(e) {
@@ -1170,34 +1212,75 @@
     updateJoyVisual(0, 0);
     window.mobileInput.joystickAngle = null;
     window.mobileInput.thrust = false;
+
+    // release simulated keys
+    setSimulatedKey('ArrowLeft','ArrowLeft',37,false);
+    setSimulatedKey('ArrowRight','ArrowRight',39,false);
+    setSimulatedKey('ArrowUp','ArrowUp',38,false);
   }
 
-  joyArea.addEventListener("pointerdown", onPointerDownJoy);
-  joyArea.addEventListener("pointermove", onPointerMoveJoy);
-  joyArea.addEventListener("pointerup", onPointerUpJoy);
-  joyArea.addEventListener("pointercancel", onPointerUpJoy);
-
-  function wireBtn(btnEl, onDown, onUp) {
-    btnEl.addEventListener("pointerdown", (e) => { e.preventDefault(); if (btnEl.setPointerCapture) try{ btnEl.setPointerCapture(e.pointerId); }catch(_){ } onDown(); });
-    btnEl.addEventListener("pointerup",   (e) => { e.preventDefault(); try{ if (btnEl.releasePointerCapture) btnEl.releasePointerCapture(e.pointerId);}catch(_){ } onUp(); });
-    btnEl.addEventListener("pointercancel",(e) => { e.preventDefault(); onUp(); });
-    btnEl.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  // pointer handlers
+  if (joyArea) {
+    joyArea.addEventListener("pointerdown", onPointerDownJoy);
+    joyArea.addEventListener("pointermove", onPointerMoveJoy);
+    joyArea.addEventListener("pointerup", onPointerUpJoy);
+    joyArea.addEventListener("pointercancel", onPointerUpJoy);
   }
 
-  wireBtn(btnShoot,
-    () => { window.keys["Space"] = true; },
-    () => { window.keys["Space"] = false; }
-  );
+  // button wiring: dispatch keyboard events (keydown on press, keyup on release) and update window.keys
+  function wireBtn(btnEl, code, key, keyCode, durationTap=false) {
+    if (!btnEl) return;
+    btnEl.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      try{ btnEl.setPointerCapture && btnEl.setPointerCapture(e.pointerId); }catch(_){}
+      setSimulatedKey(code, key, keyCode, true);
+      if (durationTap) {
+        setTimeout(() => setSimulatedKey(code, key, keyCode, false), 200);
+      }
+      // call fallback functions if the game exposes them
+      if (code === 'Space' && typeof window.shoot === 'function') window.shoot();
+      if (code === 'ShiftLeft' && typeof window.dash === 'function') window.dash();
+    });
 
-  wireBtn(btnDash,
-    () => { window.keys["Shift"] = true; },
-    () => { window.keys["Shift"] = false; }
-  );
+    btnEl.addEventListener("pointerup", (e) => {
+      e.preventDefault();
+      try{ btnEl.releasePointerCapture && btnEl.releasePointerCapture(e.pointerId); }catch(_){}
+      setSimulatedKey(code, key, keyCode, false);
+    });
 
-  wireBtn(btnPause,
-    () => { window.keys["Escape"] = true; },
-    () => { window.keys["Escape"] = false; }
-  );
+    btnEl.addEventListener("pointercancel", (e)=> { e.preventDefault(); setSimulatedKey(code, key, keyCode, false); });
+    btnEl.addEventListener("contextmenu", (ev)=> ev.preventDefault());
+  }
+
+  // Shoot: Space (code 'Space', keyCode 32)
+  wireBtn(btnShoot, 'Space', ' ', 32, false);
+  // Dash: ShiftLeft (code 'ShiftLeft', keyCode 16), auto-release
+  wireBtn(btnDash, 'ShiftLeft', 'Shift', 16, true);
+
+  // Pause button: try togglePause if present; otherwise dispatch both KeyP and Escape
+  if (btnPause) {
+    btnPause.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (typeof window.togglePause === "function") {
+        window.togglePause();
+      } else {
+        // dispatch P key (common) and Escape (some games use it)
+        dispatchKey('keydown','KeyP','p',80);
+        dispatchKey('keyup','KeyP','p',80);
+        dispatchKey('keydown','Escape','Escape',27);
+        dispatchKey('keyup','Escape','Escape',27);
+      }
+    });
+    btnPause.addEventListener("contextmenu",(ev)=>ev.preventDefault());
+  }
+
+  // block default page scroll/zoom when interacting with mobileControls
+  const controlsContainer = document.getElementById("mobileControls");
+  if (controlsContainer) {
+    controlsContainer.addEventListener("touchstart", (e)=> e.preventDefault(), { passive:false });
+    controlsContainer.addEventListener("touchmove",  (e)=> e.preventDefault(), { passive:false });
+  }
+
 })();
 </script>
 </body>
