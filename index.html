@@ -79,12 +79,13 @@
       padding:8px;
       text-align:left;
       font-size:0.85rem;
-      max-height:200px;
+      max-height:220px;
       overflow:auto;
     }
     .leaderboard h3 { margin:0 0 6px 0; font-size:0.85rem; opacity:0.8; }
     .leaderboard ol { margin:0; padding-left:18px; color:#cde; }
     .leaderboard li { margin:4px 0; }
+    #lbStatus { margin-top:6px; font-size:0.72rem; opacity:0.75; }
 
     .settings-panel {
       margin-top:12px;
@@ -195,6 +196,7 @@
         </div>
 
         <ol id="leaderList" role="list"></ol>
+        <div id="lbStatus"></div>
       </div>
 
       <div class="settings-panel" id="settingsPanel" style="display:none;">
@@ -261,8 +263,21 @@
     // Expose helpers to the game script
     window.__fb = { db, auth, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp };
 
-    onAuthStateChanged(auth, (user) => {
-      if (!user) signInAnonymously(auth).catch(console.error);
+    // ✅ Auth-ready promise so game code won't race Firestore before sign-in finishes
+    window.__fbAuthReady = new Promise((resolve) => {
+      let resolved = false;
+      onAuthStateChanged(auth, async (user) => {
+        if (user && !resolved) { resolved = true; resolve(true); return; }
+        if (!user) {
+          try {
+            await signInAnonymously(auth);
+            if (!resolved) { resolved = true; resolve(true); }
+          } catch (e) {
+            console.error("Anonymous sign-in failed:", e);
+            if (!resolved) { resolved = true; resolve(false); }
+          }
+        }
+      });
     });
   </script>
 
@@ -288,6 +303,7 @@
     const menuBestScore = document.getElementById("menuBestScore");
     const menuMaxWave = document.getElementById("menuMaxWave");
     const leaderList = document.getElementById("leaderList");
+    const lbStatus = document.getElementById("lbStatus");
     const btnPlay = document.getElementById("btnPlay");
     const btnResume = document.getElementById("btnResume");
     const btnOpenSettings = document.getElementById("btnOpenSettings");
@@ -676,6 +692,8 @@
     const PLAYER_NAME_KEY = "orbitalDrift_playerName_v1";
     const LB_CACHE_KEY = "orbitalDrift_leaderboard_cache_v3";
 
+    function setLbStatus(msg) { if (lbStatus) lbStatus.textContent = msg || ""; }
+
     function getSavedPlayerName() {
       try { const n = localStorage.getItem(PLAYER_NAME_KEY); if (!n) return ""; return String(n).slice(0,20); } catch (e) { return ""; }
     }
@@ -688,12 +706,26 @@
     }
     function cacheLeaderboard(list) { try { localStorage.setItem(LB_CACHE_KEY, JSON.stringify(list)); } catch {} }
 
+    async function ensureFbReady() {
+      if (window.__fbAuthReady) {
+        const ok = await window.__fbAuthReady;
+        return !!ok;
+      }
+      return !!window.__fb?.db;
+    }
+
     async function fetchTopScoresFirestore() {
       const fb = window.__fb;
       if (!fb?.db) return null;
+
+      const ok = await ensureFbReady();
+      if (!ok) throw new Error("Firebase auth not ready");
+
+      // ✅ SINGLE orderBy so you DON'T need a composite index
       const scoresRef = fb.collection(fb.db, "scores");
-      const q = fb.query(scoresRef, fb.orderBy("score", "desc"), fb.orderBy("ts", "desc"), fb.limit(10));
+      const q = fb.query(scoresRef, fb.orderBy("score", "desc"), fb.limit(10));
       const snap = await fb.getDocs(q);
+
       return snap.docs.map(doc => {
         const data = doc.data();
         const ts = data.ts?.toDate ? data.ts.toDate().getTime() : Date.now();
@@ -704,24 +736,34 @@
     async function submitScoreFirestore(sc, name) {
       const fb = window.__fb;
       if (!fb?.db) return false;
+
+      const ok = await ensureFbReady();
+      if (!ok) throw new Error("Firebase auth not ready");
+
       let pName = (typeof name === "string" ? name.trim() : "") || getSavedPlayerName() || "Player";
       pName = pName.slice(0, 20);
       savePlayerName(pName);
+
       const cleanScore = Math.max(0, Math.floor(sc));
+
       await fb.addDoc(fb.collection(fb.db, "scores"), {
         name: pName,
         score: cleanScore,
         ts: fb.serverTimestamp()
       });
+
       return true;
     }
 
     async function renderLeaderboardUI() {
       leaderList.innerHTML = "";
+      setLbStatus("Loading leaderboard…");
+
       try {
         const live = await fetchTopScoresFirestore();
         if (live && live.length) {
           cacheLeaderboard(live);
+          setLbStatus("Live leaderboard ✔");
           for (let i = 0; i < live.length; i++) {
             const e = live[i];
             const li = document.createElement("li");
@@ -729,16 +771,19 @@
             li.textContent = `${i+1}. ${e.name} — ${e.score} — ${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
             leaderList.appendChild(li);
           }
-          return;
+          return live;
         }
-      } catch (_) {}
+      } catch (err) {
+        console.warn("Leaderboard fetch failed (using cache):", err);
+        setLbStatus("Offline/cache leaderboard (check Firestore rules/auth) ⚠");
+      }
 
       const cached = loadCachedLeaderboard();
       if (!cached.length) {
         const li = document.createElement("li");
         li.textContent = "No scores yet — be the first!";
         leaderList.appendChild(li);
-        return;
+        return [];
       }
       for (let i = 0; i < cached.length; i++) {
         const e = cached[i];
@@ -747,11 +792,11 @@
         li.textContent = `${i+1}. ${e.name} — ${e.score} — ${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
         leaderList.appendChild(li);
       }
+      return cached;
     }
 
-    function getBestScoreFromCache() {
-      const list = loadCachedLeaderboard();
-      if (!list.length) return 0;
+    function getBestScoreFromList(list) {
+      if (!list || !list.length) return 0;
       return list.reduce((m, e) => Math.max(m, e.score || 0), 0);
     }
 
@@ -798,18 +843,29 @@
     function endGame() {
       gameState = STATE_GAMEOVER;
       lastScore = Math.max(0, Math.floor(score));
+
       const currentName = (playerNameInput && playerNameInput.value && playerNameInput.value.trim())
         ? playerNameInput.value.trim().slice(0,20)
         : (getSavedPlayerName() || "Player");
 
-      submitScoreFirestore(lastScore, currentName)
-        .then(() => renderLeaderboardUI())
-        .catch(() => renderLeaderboardUI());
+      // ✅ Save, then re-fetch leaderboard, then update best score based on LIVE list
+      (async () => {
+        try {
+          setLbStatus("Saving score…");
+          await submitScoreFirestore(lastScore, currentName);
+          setLbStatus("Saved ✔ Refreshing…");
+        } catch (e) {
+          console.warn("Score submit failed:", e);
+          setLbStatus("Couldn’t save score (check Firestore rules) ⚠");
+        }
 
-      bestScore = getBestScoreFromCache();
+        const list = await renderLeaderboardUI();
+        bestScore = getBestScoreFromList(list);
+        menuBestScore.textContent = bestScore.toString();
+      })();
+
       maxWaveEver = Math.max(maxWaveEver, wave);
       menuLastScore.textContent = lastScore.toString();
-      menuBestScore.textContent = bestScore.toString();
       menuMaxWave.textContent = maxWaveEver.toString();
       menuSubtitle.textContent = "Hull compromised. Drift ended.";
       btnResume.style.display = "none";
@@ -1009,8 +1065,8 @@
       });
     }
 
-    function initMenuFromStorage() {
-      bestScore = getBestScoreFromCache();
+    async function initMenuFromStorage() {
+      bestScore = getBestScoreFromList(loadCachedLeaderboard());
       menuOverlay.style.display = "flex";
       menuSubtitle.textContent = "Survive the incoming waves.";
       menuLastScore.textContent = "0";
@@ -1023,19 +1079,13 @@
       AudioEngine.init();
       AudioEngine.setVolume(window.gameSettings.sfxVolume);
       initPlayerNameUI();
-      renderLeaderboardUI();
-    }
 
-    // Keyboard start/pause controls
-    window.addEventListener("keydown", (e) => {
-      if (e.code === "Space" && (gameState === STATE_MENU || gameState === STATE_GAMEOVER)) {
-        startNewGame();
-        e.preventDefault();
-      } else if (e.code === "KeyP") {
-        if (gameState === STATE_PLAYING) pauseGame();
-        else if (gameState === STATE_PAUSED) resumeGame();
-      }
-    });
+      // Try loading live leaderboard once Firebase is ready
+      await ensureFbReady();
+      const list = await renderLeaderboardUI();
+      bestScore = getBestScoreFromList(list);
+      menuBestScore.textContent = bestScore.toString();
+    }
 
     initMenuFromStorage();
     requestAnimationFrame(gameLoop);
